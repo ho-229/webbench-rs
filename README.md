@@ -1,1 +1,1 @@
-# rust-webbench
+# Webbench-rs
