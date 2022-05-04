@@ -1,19 +1,19 @@
-use clap::{arg, App};
+use clap::{arg, App, crate_version};
 use hyper::{Method, Uri, Version, Request};
 
 mod core;
 
 fn main() {
-    let (clients, request) = parse_args();
+    let config = parse_args();
 
-    println!("clients: {} \nrequest: {:?}", clients, request);
-    core::Webbench::new(request, clients, false, false);
+    println!("config: {:?}", config);
+    core::Webbench::new(&config);
     
     //let mut bench = core::Webbench::new();
     //let mut _benchmark = Webbench::new(build_header(&args), client, parse_flag(&args));
 }
 
-fn parse_args() -> (usize, Request<()>) {
+fn parse_args() -> core::Config {
     let mut clients = usize::default();
 
     let mut method = Method::default();
@@ -22,6 +22,7 @@ fn parse_args() -> (usize, Request<()>) {
 
     let args = App::new("Webbench - Simple Web Benchmark")
         .author("Copyright (c) Ho 229")
+        .version(crate_version!())
         
         .arg(arg!(-t --time "Run benchmark for <sec> seconds.")
             .value_name("sec").default_value("30"))
@@ -73,15 +74,18 @@ fn parse_args() -> (usize, Request<()>) {
         
         .get_matches();
 
-    let connection = if args.is_present("keep") { "keep-alive" } else { "close" };
+    let is_keepalive = args.is_present("keep");
+    let connection = if is_keepalive { "keep-alive" } else { "close" };
 
     let request = Request::builder()
         .method(method)
-        .uri(uri)
+        .uri(uri.clone())
         .version(version)
+        .header("User-Agent", "webbench-rs")
+        .header("Host", uri.to_string().as_str())
         .header("Connection", connection)
         .body(())
         .unwrap();
 
-    (clients, request)
+    core::Config { request, is_keepalive, is_force: args.is_present("force"), clients }
 }
