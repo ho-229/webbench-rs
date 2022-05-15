@@ -1,31 +1,61 @@
-use clap::{arg, App, crate_version};
-use hyper::{Method, Uri, Version, Request};
+use std::{sync::atomic::Ordering, time::Duration};
+use clap::{arg, Command, crate_version};
+use hyper::{Method, Uri, Version};
 
 mod core;
 
-fn main() {
-    let config = parse_args();
+#[tokio::main]
+async fn main() {
+    let (config, mut time) = parse_args();
 
-    println!("config: {:?}", config);
-    core::Webbench::new(&config);
+    println!("Welcome to the Webbench.");
+    println!("\n{:#?}", config.build_request());
+
+    println!("\nRunning info: {} client(s), running {} sec.", config.clients, time);
     
-    //let mut bench = core::Webbench::new();
-    //let mut _benchmark = Webbench::new(build_header(&args), client, parse_flag(&args));
+    let mut benchmark = core::Webbench::new(config);
+
+    benchmark.start().await;
+    
+    loop {
+        if benchmark.status().failed.load(Ordering::Acquire) >= 100 || time == 0 {
+            benchmark.stop().await;
+            break;
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        time -= 1;
+    }
+
+    benchmark.wait().await;
+
+    let status = benchmark.status();
+    println!("Request: {} success, {} failed", status.success.load(Ordering::Relaxed), 
+        status.failed.load(Ordering::Relaxed));
 }
 
-fn parse_args() -> core::Config {
+fn parse_args() -> (core::Config, usize) {
     let mut clients = usize::default();
+    let mut time = usize::default();
 
     let mut method = Method::default();
     let mut uri = Uri::default();
     let mut version = Version::default();
 
-    let args = App::new("Webbench - Simple Web Benchmark")
+    let args = Command::new("Webbench - Simple Web Benchmark")
         .author("Copyright (c) Ho 229")
         .version(crate_version!())
         
         .arg(arg!(-t --time "Run benchmark for <sec> seconds.")
-            .value_name("sec").default_value("30"))
+            .value_name("sec").default_value("30").validator(|num| {
+                match num.parse::<usize>() {
+                    Ok(n) => {
+                        if n > 0 { time = n; Ok(()) }
+                        else { Err("<sec> must be greater than 0".to_string()) }
+                    },
+                    Err(err) => Err(err.to_string())
+                }
+            }))
 
         .arg(arg!(-c --client "Run <N> HTTP clients at once.")
             .value_name("N").default_value("1").validator(|num| {
@@ -39,7 +69,7 @@ fn parse_args() -> core::Config {
             }))
 
         .arg(arg!(-k --keep "Keep-Alive"))
-        .arg(arg!(-f --force "Don't wait for reply from server."))
+        //.arg(arg!(-f --force "Don't wait for reply from server."))
 
         .arg(arg!(-m --method "Use [GET(default), HEAD, OPTIONS, TRACE] request method")
             .default_value("GET").validator(|str| {
@@ -74,18 +104,10 @@ fn parse_args() -> core::Config {
         
         .get_matches();
 
-    let is_keepalive = args.is_present("keep");
-    let connection = if is_keepalive { "keep-alive" } else { "close" };
-
-    let request = Request::builder()
-        .method(method)
-        .uri(uri.clone())
-        .version(version)
-        .header("User-Agent", "webbench-rs")
-        .header("Host", uri.to_string().as_str())
-        .header("Connection", connection)
-        .body(())
-        .unwrap();
-
-    core::Config { request, is_keepalive, is_force: args.is_present("force"), clients }
+    (core::Config {
+        request_data: (method, uri, version),
+        is_keepalive: args.is_present("keep"),
+        is_force: false,    // TODO
+        clients
+    }, time)
 }

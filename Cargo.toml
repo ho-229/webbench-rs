@@ -6,6 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "3.0.14", features = ["cargo"]}
-hyper = { version = "0.14.16" }
-tokio = { version = "1.15.0" }
+clap = { version = "3.1.17", features = ["cargo"]}
+hyper = { version = "0.14.18", features = ["full"] }
+tokio = { version = "1.18.1", features = ["full"]}
