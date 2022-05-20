@@ -1,5 +1,5 @@
 use std::{sync::atomic::Ordering, time::Duration};
-use clap::{arg, Command, crate_version};
+use clap::{arg, Command};
 use hyper::{Method, Uri, Version};
 
 mod core;
@@ -44,7 +44,7 @@ fn parse_args() -> (core::Config, usize) {
 
     let args = Command::new("Webbench - Simple Web Benchmark")
         .author("Copyright (c) Ho 229")
-        .version(crate_version!())
+        .version(clap::crate_version!())
         
         .arg(arg!(-t --time "Run benchmark for <sec> seconds.")
             .value_name("sec").default_value("30").validator(|num| {

@@ -1,6 +1,6 @@
-﻿use hyper::{Request, Client, Body, Method, Uri, Version, body::HttpBody};
+﻿use hyper::{Request, Client, Body, Method, Uri, Version, body::HttpBody, client::HttpConnector};
 use tokio::task::JoinHandle;
-use std::{sync::{atomic::{AtomicU32, AtomicU64, Ordering, AtomicBool}, Arc}};
+use std::{sync::{atomic::{AtomicU32, AtomicU64, Ordering}, Arc}};
 
 #[derive(Debug)]
 pub struct Config {
@@ -29,7 +29,6 @@ pub struct Status {
     pub recived: AtomicU64,
     pub success: AtomicU32,
     pub failed: AtomicU32,
-    pub runnable: AtomicBool,
 }
 
 pub struct Webbench {
@@ -48,8 +47,6 @@ impl Webbench {
     }
 
     pub async fn start(&mut self) {
-        self.status.runnable.store(true, Ordering::Relaxed);
-
         for _ in 0..self.config.clients {
             let config = self.config.clone();
             let status = self.status.clone();
@@ -63,8 +60,6 @@ impl Webbench {
     }
 
     pub async fn stop(&mut self) {
-        self.status.runnable.store(false, Ordering::Release);
-
         for handle in self.join_list.iter_mut() {
             handle.abort();
         }
@@ -81,12 +76,15 @@ impl Webbench {
     }
 
     async fn benchmark(config: Arc<Config>, status: Arc<Status>) {
+        let mut connector = HttpConnector::new();
+        connector.set_nodelay(true);
+
         let client = Client::builder()
             .set_host(false)
             .pool_max_idle_per_host(if config.is_keepalive { 1 } else { 0 })
-            .build_http::<Body>();
+            .build(connector);
 
-        while status.runnable.load(Ordering::Acquire) {
+        loop {
             match client.request(config.build_request()).await {
                 Ok(mut resp) => {
                     // Count body size
