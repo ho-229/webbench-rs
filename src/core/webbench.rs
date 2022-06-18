@@ -1,27 +1,12 @@
-﻿use hyper::{Request, Client, Body, Method, Uri, Version, body::HttpBody, client::HttpConnector};
-use tokio::task::JoinHandle;
-use std::{sync::{atomic::{AtomicU32, AtomicU64, Ordering}, Arc}};
+﻿use tokio::{runtime, net::TcpStream, io::AsyncWriteExt};
+use std::{sync::{atomic::{AtomicU32, AtomicU64, Ordering}, Arc}, time::Duration};
 
 #[derive(Debug)]
 pub struct Config {
-    pub request_data: (Method, Uri, Version),
+    pub addr: (String, u16),
+    pub request: Vec<u8>,
     pub is_keepalive: bool,
-    pub is_force: bool,
     pub clients: usize,
-}
-
-impl Config {
-    pub fn build_request(&self) -> Request<Body> {
-        Request::builder()
-            .method(self.request_data.0.clone())
-            .uri(self.request_data.1.clone())
-            .version(self.request_data.2)
-            .header("Host", self.request_data.1.clone().to_string())
-            .header("User-Agent", "webbench-rs")
-            .header("Connection", if self.is_keepalive { "keep-alive" } else { "close" })
-            .body(Body::empty())
-            .unwrap()
-    }
 }
 
 #[derive(Debug, Default)]
@@ -31,78 +16,126 @@ pub struct Status {
     pub failed: AtomicU32,
 }
 
+struct Parts {
+    config: Config,
+    status: Status,
+}
+
 pub struct Webbench {
-    config: Arc<Config>,
-    status: Arc<Status>,
-    join_list: Vec<JoinHandle<()>>,
+    inner: Arc<Parts>,
+    runtime: runtime::Runtime,
 }
 
 impl Webbench {
-    pub fn new(config: Config) -> Self {
-        Self {
-            config: Arc::new(config),
-            status: Arc::new(Status::default()),
-            join_list: Vec::new()
+    pub fn new(config: Config) -> super::Result<Self> {
+        let runtime = runtime::Builder::new_multi_thread()
+            .worker_threads(num_cpus::get_physical())
+            .enable_io()
+            .build()?;
+
+        Ok(Self {
+            inner: Arc::new(Parts {
+                config,
+                status: Status::default(),
+            }),
+            runtime,
+        })
+    }
+
+    pub fn start(&self) {
+        for _ in 0..self.inner.config.clients {
+            self.runtime.spawn(Self::benchmark(self.inner.clone()));
         }
     }
 
-    pub async fn start(&mut self) {
-        for _ in 0..self.config.clients {
-            let config = self.config.clone();
-            let status = self.status.clone();
-
-            let f = tokio::spawn(async move {
-                Self::benchmark(config, status).await;
-            });
-
-            self.join_list.push(f);
-        }
-    }
-
-    pub async fn stop(&mut self) {
-        for handle in self.join_list.iter_mut() {
-            handle.abort();
-        }
-    }
-
-    pub async fn wait(&mut self) {
-        for join_handle in self.join_list.iter_mut() {
-            let _ = join_handle.await;
-        }
+    pub fn stop(self, duration: Duration) {
+        self.runtime.shutdown_timeout(duration);
     }
 
     pub fn status(&self) -> &Status {
-        &self.status
+        &self.inner.status
     }
 
-    async fn benchmark(config: Arc<Config>, status: Arc<Status>) {
-        let mut connector = HttpConnector::new();
-        connector.set_nodelay(true);
+    async fn benchmark(inner: Arc<Parts>) {
+        let mut buf = [0; 1024];
+        let mut ret = 0;
+        
+        if inner.config.is_keepalive {
+            loop {
+                if let Ok(mut connection) = TcpStream::connect(&inner.config.addr).await {
+                    let _ = connection.set_nodelay(true);
 
-        let client = Client::builder()
-            .set_host(false)
-            .pool_max_idle_per_host(if config.is_keepalive { 1 } else { 0 })
-            .build(connector);
+                    'keep: loop {
+                        while match connection.write(&inner.config.request[ret..]).await {
+                            Ok(n) if n < inner.config.request.len() => { ret = n; true }
+                            Ok(_) => { ret = 0; false },
+                            Err(_) => {
+                                inner.status.failed.fetch_add(1, Ordering::AcqRel);
+                                break 'keep;
+                            },
+                        } {}
 
-        loop {
-            match client.request(config.build_request()).await {
-                Ok(mut resp) => {
-                    // Count body size
-                    let mut recived = u64::default();
-                    while let Some(chunk) = 
-                        resp.body_mut().data().await.and_then(|chunk| {
-                            if let Ok(chunk) = chunk { Some(chunk) } else { None }
-                        }) {
-                        recived += chunk.len() as u64;
+                        if let Err(_) = connection.readable().await {
+                            break;   // Re-connect
+                        }
+
+                        while let Ok(n) = connection.try_read(&mut buf) {
+                            if n > 0 {
+                                inner.status.recived.fetch_add(n as u64, Ordering::AcqRel);
+                            } else {
+                                break; // EOF
+                            }
+                        }
+
+                        inner.status.success.fetch_add(1, Ordering::AcqRel);
+                        continue;
                     }
-
-                    status.recived.fetch_add(recived, Ordering::AcqRel);
-                    status.success.fetch_add(1, Ordering::AcqRel);
-                },
-                Err(_) => {
-                    status.failed.fetch_add(1, Ordering::AcqRel);
                 }
+
+                inner.status.failed.fetch_add(1, Ordering::AcqRel);
+            }
+        } else {
+            'close: loop {
+                ret = 0;
+                let mut connection;
+
+                match TcpStream::connect(&inner.config.addr).await {
+                    Ok(c) => connection = c,
+                    Err(_) => {
+                        inner.status.failed.fetch_add(1, Ordering::AcqRel);
+                        continue;
+                    },
+                }
+
+                while match connection.write(&inner.config.request[ret..]).await {
+                    Ok(n) if n < inner.config.request.len() => { ret = n; true }
+                    Ok(_) => false,
+                    Err(_) => {
+                        inner.status.failed.fetch_add(1, Ordering::AcqRel);
+                        continue 'close;
+                    },
+                } {}
+
+                if let Err(_) = connection.readable().await {
+                    inner.status.failed.fetch_add(1, Ordering::AcqRel);
+                    continue;   // Re-connect
+                }
+
+                while let Ok(n) = connection.try_read(&mut buf) {
+                    if n > 0 {
+                        inner.status.recived.fetch_add(n as u64, Ordering::AcqRel);
+                    } else {
+                        break;  // EOF
+                    }
+                }
+
+                // if let Err(_) = connection.read(&mut buf).await {
+                //     inner.status.failed.fetch_add(1, Ordering::AcqRel);
+                // }
+
+                inner.status.success.fetch_add(1, Ordering::AcqRel);
             }
         }
+        
     }
 }

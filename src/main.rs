@@ -1,40 +1,51 @@
-use std::{sync::atomic::Ordering, time::Duration};
+use std::{time::Duration, sync::atomic::Ordering};
 use clap::{arg, Command};
-use hyper::{Method, Uri, Version};
+use http::{request, Method, Uri, Version};
 
 mod core;
 
-#[tokio::main]
-async fn main() {
-    let (config, mut time) = parse_args();
+fn main() -> core::Result<()> {
+    let (config, mut time) = parse_args()?;
 
     println!("Welcome to the Webbench.");
-    println!("\n{:#?}", config.build_request());
 
+    print!("Request:\n{}", std::str::from_utf8(&config.request).unwrap());
     println!("\nRunning info: {} client(s), running {} sec.", config.clients, time);
     
-    let mut benchmark = core::Webbench::new(config);
+    let benchmark = core::Webbench::new(config)?;
 
-    benchmark.start().await;
-    
+    benchmark.start();
+
     loop {
-        if benchmark.status().failed.load(Ordering::Acquire) >= 100 || time == 0 {
-            benchmark.stop().await;
+        let success = benchmark.status().success.load(Ordering::Acquire);
+        let failed = benchmark.status().failed.load(Ordering::Acquire);
+
+        let print_result = || {
+            println!("Recvied: {} bytes.", benchmark.status().recived.load(Ordering::Acquire));
+            println!("Requests: {} success, {} failed.", success, failed);
+        };
+
+        if failed as f64 / success as f64 > 0.5 {
+            println!("Too many failures.");
+            print_result();
             break;
         }
 
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        if time == 0 {
+            print_result();
+            break;
+        }
+
+        std::thread::sleep(Duration::from_secs(1));
         time -= 1;
     }
 
-    benchmark.wait().await;
-
-    let status = benchmark.status();
-    println!("Request: {} success, {} failed", status.success.load(Ordering::Relaxed), 
-        status.failed.load(Ordering::Relaxed));
+    benchmark.stop(Duration::from_secs(1));
+    
+    Ok(())
 }
 
-fn parse_args() -> (core::Config, usize) {
+fn parse_args() -> core::Result<(core::Config, usize)> {
     let mut clients = usize::default();
     let mut time = usize::default();
 
@@ -104,10 +115,27 @@ fn parse_args() -> (core::Config, usize) {
         
         .get_matches();
 
-    (core::Config {
-        request_data: (method, uri, version),
-        is_keepalive: args.is_present("keep"),
-        is_force: false,    // TODO
-        clients
-    }, time)
+    let is_keepalive = args.is_present("keep");
+
+    let connection = if is_keepalive { "keep-alive" } else { "close" };
+
+    let request = request::Builder::new()
+        .method(method)
+        .uri(uri.clone())
+        .version(version)
+        .header("User-Agent", "webbench-rs")
+        .header("Host", uri.clone().host().unwrap())
+        .header("Connection", connection)
+        .body(())?;
+
+    Ok((core::Config {
+        addr: (request.uri().host().unwrap().to_string(), 
+            request.uri().port_u16().unwrap_or(match uri.scheme_str().unwrap() {
+                "https" => 443,
+                _ => 80,
+        })),
+        request: core::protocol::raw_request(request)?,
+        is_keepalive,
+        clients,
+    }, time))
 }

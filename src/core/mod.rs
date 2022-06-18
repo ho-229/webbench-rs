@@ -1,4 +1,6 @@
-﻿pub mod webbench;
+﻿pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-pub use self::webbench::Webbench;
-pub use self::webbench::Config;
+pub mod webbench;
+pub mod protocol;
+
+pub use self::webbench::{Config, Webbench};
