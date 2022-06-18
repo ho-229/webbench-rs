@@ -129,10 +129,6 @@ impl Webbench {
                     }
                 }
 
-                // if let Err(_) = connection.read(&mut buf).await {
-                //     inner.status.failed.fetch_add(1, Ordering::AcqRel);
-                // }
-
                 inner.status.success.fetch_add(1, Ordering::AcqRel);
             }
         }
