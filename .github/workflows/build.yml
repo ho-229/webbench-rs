@@ -24,10 +24,10 @@ jobs:
 
       - name: Setup rust-toolchain
         uses: actions-rs/toolchain@v1
-          with:
-            profile: minimal
-            toolchain: stable
-            components: rustfmt
+        with:
+          profile: minimal
+          toolchain: stable
+          components: rustfmt
 
         uses: Swatinem/rust-cache@v1
 
