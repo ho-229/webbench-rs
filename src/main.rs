@@ -1,46 +1,47 @@
 use std::{time::Duration, sync::atomic::Ordering};
 use clap::{arg, Command};
 use http::{request, Method, Uri, Version};
+use byte_unit::Byte;
 
 mod core;
 
 fn main() -> core::Result<()> {
-    let (config, mut time) = parse_args()?;
+    let (config, time) = parse_args()?;
 
-    println!("Welcome to the Webbench.");
+    println!("Welcome to the Webbench.\n");
 
     print!("Request:\n{}", std::str::from_utf8(&config.request).unwrap());
-    println!("\nRunning info: {} client(s), running {} sec.", config.clients, time);
+    println!("\nRunning info: {} client(s), running {} sec.\n", config.clients, time);
     
     let benchmark = core::Webbench::new(config)?;
 
     benchmark.start();
 
-    loop {
-        let success = benchmark.status().success.load(Ordering::Acquire);
-        let failed = benchmark.status().failed.load(Ordering::Acquire);
-
-        let print_result = || {
-            println!("Recvied: {} bytes.", benchmark.status().recived.load(Ordering::Acquire));
-            println!("Requests: {} success, {} failed.", success, failed);
-        };
+    let mut count = time;
+    let (success, failed, received) = loop {
+        let status = benchmark.status();
+        let success = status.success.load(Ordering::Acquire);
+        let failed = status.failed.load(Ordering::Acquire);
+        let received = status.received.load(Ordering::Acquire);
 
         if failed as f64 / success as f64 > 0.5 {
             println!("Too many failures.");
-            print_result();
-            break;
+            break (success, failed, received);
         }
 
-        if time == 0 {
-            print_result();
-            break;
+        if count == 0 {
+            break (success, failed, received);
         }
 
         std::thread::sleep(Duration::from_secs(1));
-        time -= 1;
-    }
+        count -= 1;
+    };
 
-    benchmark.stop(Duration::from_secs(1));
+    println!("Received: total {}, {}/s.", Byte::from(received).get_appropriate_unit(true),
+        Byte::from((received as f64 / time as f64) as u128).get_appropriate_unit(true));
+    println!("Requests: {} success, {} failed.", success, failed);
+
+    benchmark.stop();
     
     Ok(())
 }
@@ -100,22 +101,25 @@ fn parse_args() -> core::Result<(core::Config, usize)> {
         .arg(arg!(-h --http "Use HTTP/[1.1, 2] version")
             .default_value("1.1").validator(|str| {
                 match str {
+                    "0.9" => { version = Version::HTTP_09; Ok(()) },
+                    "1.0" => { version = Version::HTTP_10; Ok(()) },
                     "1.1" => { version = Version::HTTP_11; Ok(()) },
-                    "2" => { version = Version::HTTP_2; Ok(()) },
-                    _ => Err("Only [1.1(default), 2] are supported by --http".to_string())
+                    //"2" => { version = Version::HTTP_2; Ok(()) },
+                    _ => Err("Only [0.9, 1.0, 1.1(default)] are supported by --http".to_string())
                 }
             }))
 
         .arg(arg!([URL] "URL address").required(true).validator(|str| {
             match str.parse::<Uri>() {
-                Ok(u) =>{ uri = u; Ok(()) },
+                Ok(u) if u.host().is_some() && u.scheme().is_some() => { uri = u; Ok(()) },
+                Ok(_) => Err("URI must contain host and scheme".to_string()),
                 Err(e) => Err(e.to_string())
             }
         }))
         
         .get_matches();
 
-    let is_keepalive = args.is_present("keep");
+    let is_keepalive = args.is_present("keep") && version == Version::HTTP_11;
 
     let connection = if is_keepalive { "keep-alive" } else { "close" };
 
