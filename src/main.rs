@@ -64,7 +64,7 @@ fn parse_args() -> core::Result<(core::Config, usize)> {
                 match num.parse::<usize>() {
                     Ok(n) => {
                         if n > 0 { time = n; Ok(()) }
-                        else { Err("<sec> must be greater than 0".to_string()) }
+                        else { Err("<sec> must be greater than 0.".to_string()) }
                     },
                     Err(err) => Err(err.to_string())
                 }
@@ -75,16 +75,16 @@ fn parse_args() -> core::Result<(core::Config, usize)> {
                 match num.parse::<usize>() {
                     Ok(n) => {
                         if n > 0 {  clients = n; Ok(()) }
-                        else { Err("N must be greater than 0".to_string()) }
+                        else { Err("N must be greater than 0.".to_string()) }
                     },
                     Err(err) => Err(err.to_string())
                 }
             }))
 
-        .arg(arg!(-k --keep "Keep-Alive"))
+        .arg(arg!(-k --keep "Keep-Alive."))
         //.arg(arg!(-f --force "Don't wait for reply from server."))
 
-        .arg(arg!(-m --method "Use [GET(default), HEAD, OPTIONS, TRACE] request method")
+        .arg(arg!(-m --method "Use [GET, HEAD, OPTIONS, TRACE] request method.")
             .default_value("GET").validator(|str| {
                 match str.parse::<Method>() {
                     Ok(res) => {
@@ -92,28 +92,28 @@ fn parse_args() -> core::Result<(core::Config, usize)> {
                             Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE => {
                                 method = res; Ok(())
                             },
-                            _ => Err("Only [GET(default), HEAD, OPTIONS, TRACE] are supported by --method".to_string())
+                            _ => Err("Only [GET, HEAD, OPTIONS, TRACE] are supported by --method.".to_string())
                         }
                     },
                     Err(e) => Err(e.to_string())
                 }
             }))
 
-        .arg(arg!(-h --http "Use HTTP/[1.1, 2] version")
+        .arg(arg!(-h --http "Use HTTP/[0.9, 1.1, 2] version.")
             .default_value("1.1").validator(|str| {
                 match str {
                     "0.9" => { version = Version::HTTP_09; Ok(()) },
                     "1.0" => { version = Version::HTTP_10; Ok(()) },
                     "1.1" => { version = Version::HTTP_11; Ok(()) },
                     //"2" => { version = Version::HTTP_2; Ok(()) },
-                    _ => Err("Only [0.9, 1.0, 1.1(default)] are supported by --http".to_string())
+                    _ => Err("Only [0.9, 1.0, 1.1] are supported by --http.".to_string())
                 }
             }))
 
-        .arg(arg!([URL] "URL address").required(true).validator(|str| {
+        .arg(arg!([URL] "URL address.").required(true).validator(|str| {
             match str.parse::<Uri>() {
                 Ok(u) if u.host().is_some() && u.scheme().is_some() => { uri = u; Ok(()) },
-                Ok(_) => Err("URI must contain host and scheme".to_string()),
+                Ok(_) => Err("URI must contain host and scheme.".to_string()),
                 Err(e) => Err(e.to_string())
             }
         }))
