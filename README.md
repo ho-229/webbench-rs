@@ -33,7 +33,7 @@ This is a Rust refactored version of [Radim Kolar - Web Bench](http://home.tisca
 
   OPTIONS:
       -c, --client <N>         Run <N> HTTP clients at once. [default: 1]
-      -h, --http <http>        Use HTTP/[0.9, 1.1, 2] version. [default: 1.1]
+      -h, --http <http>        Use HTTP/[0.9, 1.0, 1.1] version. [default: 1.1]
           --help               Print help information
       -k, --keep               Keep-Alive.
       -m, --method <method>    Use [GET, HEAD, OPTIONS, TRACE] request method. [default: GET]

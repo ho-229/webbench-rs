@@ -99,7 +99,7 @@ fn parse_args() -> core::Result<(core::Config, usize)> {
                 }
             }))
 
-        .arg(arg!(-h --http "Use HTTP/[0.9, 1.1, 2] version.")
+        .arg(arg!(-h --http "Use HTTP/[0.9, 1.0, 1.1] version.")
             .default_value("1.1").validator(|str| {
                 match str {
                     "0.9" => { version = Version::HTTP_09; Ok(()) },
