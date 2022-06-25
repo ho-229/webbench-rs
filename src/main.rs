@@ -1,4 +1,4 @@
-use std::{time::Duration, sync::atomic::Ordering};
+use std::{time::Duration, sync::atomic::Ordering, net::ToSocketAddrs};
 use clap::{arg, Command};
 use http::{request, Method, Uri, Version};
 use byte_unit::Byte;
@@ -39,7 +39,8 @@ fn main() -> core::Result<()> {
 
     println!("Received: total {}, {}/s.", Byte::from(received).get_appropriate_unit(true),
         Byte::from((received as f64 / time as f64) as u128).get_appropriate_unit(true));
-    println!("Requests: {} success, {} failed.", success, failed);
+    println!("Requests: {} req/min. {} success, {} failed.",
+        (60.00 / time as f64 * success as f64) as u32, success, failed);
 
     benchmark.stop();
     
@@ -132,12 +133,15 @@ fn parse_args() -> core::Result<(core::Config, usize)> {
         .header("Connection", connection)
         .body(())?;
 
+    let addr = format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(
+        match uri.scheme_str().unwrap() {
+            "https" => 443,
+            _ => 80,
+        }
+    )).to_socket_addrs()?.as_slice().to_vec();
+
     Ok((core::Config {
-        addr: (request.uri().host().unwrap().to_string(), 
-            request.uri().port_u16().unwrap_or(match uri.scheme_str().unwrap() {
-                "https" => 443,
-                _ => 80,
-        })),
+        addr,
         request: core::protocol::raw_request(request)?,
         is_keepalive,
         clients,

@@ -1,9 +1,9 @@
-﻿use tokio::{runtime, net::TcpStream, io::AsyncWriteExt};
-use std::{sync::{atomic::{AtomicU32, AtomicU64, Ordering}, Arc}, time::Duration};
+﻿use tokio::{runtime, net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}};
+use std::{sync::{atomic::{AtomicU32, AtomicU64, Ordering}, Arc}, time::Duration, net::SocketAddr};
 
 #[derive(Debug)]
 pub struct Config {
-    pub addr: (String, u16),
+    pub addr: Vec<SocketAddr>,
     pub request: Vec<u8>,
     pub is_keepalive: bool,
     pub clients: usize,
@@ -62,10 +62,10 @@ impl Webbench {
 
     #[inline]
     async fn bench_keepalive(inner: Arc<Parts>) {
-        let mut buf = [0; 4096];
+        let mut buf = [0; 1024];
         loop {
             let mut connection;
-            match TcpStream::connect(&inner.config.addr).await {
+            match TcpStream::connect(&*inner.config.addr).await {
                 Ok(c) => {
                     connection = c;
                     let _ = connection.set_nodelay(true);
@@ -76,43 +76,39 @@ impl Webbench {
                 },
             };
 
-            'outer: loop {
-                let mut ret = 0;
-                while match connection.write(&inner.config.request[ret..]).await {
-                    Ok(n) if n < inner.config.request.len() => { ret = n; true }
-                    Ok(_) => false,
-                    Err(_) => {
-                        inner.status.failed.fetch_add(1, Ordering::AcqRel);
-                        break 'outer;
-                    },
-                } {}
-
-                if let Err(_) = connection.readable().await {
-                    break;   // Re-connect
+            loop {
+                if let Err(_) = connection.write_all(&inner.config.request).await {
+                    inner.status.failed.fetch_add(1, Ordering::AcqRel);
+                    break;
                 }
 
-                while let Ok(n) = connection.try_read(&mut buf) {
-                    if n == 0 {
+                let mut acc = 0;
+                while let Ok(n) = connection.read(&mut buf).await {
+                    acc += n as u64;
+
+                    if n < 1024 {
                         break;   // EOF
                     }
-
-                    inner.status.received.fetch_add(n as u64, Ordering::AcqRel);
                 }
 
-                inner.status.success.fetch_add(1, Ordering::AcqRel);
+                if acc == 0 {
+                    inner.status.failed.fetch_add(1, Ordering::AcqRel);
+                } else {
+                    inner.status.received.fetch_add(acc, Ordering::AcqRel);
+                    inner.status.success.fetch_add(1, Ordering::AcqRel);
+                }
             }
         }
     }
 
     #[inline]
     async fn bench_close(inner: Arc<Parts>) {
-        let mut buf = [0; 4096];
+        let mut buf = [0; 1024];
 
-        'outer: loop {
-            let mut ret = 0;
+        loop {
             let mut connection;
 
-            match TcpStream::connect(&inner.config.addr).await {
+            match TcpStream::connect(&*inner.config.addr).await {
                 Ok(c) => {
                     connection = c;
                     let _ = connection.set_nodelay(true);
@@ -123,29 +119,26 @@ impl Webbench {
                 },
             }
 
-            while match connection.write(&inner.config.request[ret..]).await {
-                Ok(n) if n < inner.config.request.len() => { ret = n; true }
-                Ok(_) => false,
-                Err(_) => {
-                    inner.status.failed.fetch_add(1, Ordering::AcqRel);
-                    continue 'outer;
-                },
-            } {}
-
-            if let Err(_) = connection.readable().await {
+            if let Err(_) = connection.write_all(&inner.config.request).await {
                 inner.status.failed.fetch_add(1, Ordering::AcqRel);
-                continue;   // Re-connect
+                continue;
             }
 
-            while let Ok(n) = connection.try_read(&mut buf) {
-                if n == 0{
-                    break;
+            let mut acc = 0;
+            while let Ok(n) = connection.read(&mut buf).await {
+                acc += n as u64;
+
+                if n < 1024 {
+                    break;   // EOF
                 }
-
-                inner.status.received.fetch_add(n as u64, Ordering::AcqRel);
             }
 
-            inner.status.success.fetch_add(1, Ordering::AcqRel);
+            if acc == 0 {
+                inner.status.failed.fetch_add(1, Ordering::AcqRel);
+            } else {
+                inner.status.received.fetch_add(acc, Ordering::AcqRel);
+                inner.status.success.fetch_add(1, Ordering::AcqRel);
+            }
         }
     }
 }
