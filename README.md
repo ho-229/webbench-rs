@@ -12,7 +12,7 @@ This is a Rust refactored version of [Radim Kolar - Web Bench](http://home.tisca
   - [ ] HTTP 2
 - [x] Keep alive.
 - [ ] Customizable header.
-- [ ] Use proxy server for request.
+- [x] Use proxy server for request.
 
 ## Usage
 
@@ -37,6 +37,7 @@ This is a Rust refactored version of [Radim Kolar - Web Bench](http://home.tisca
           --help               Print help information
       -k, --keep               Keep-Alive.
       -m, --method <method>    Use [GET, HEAD, OPTIONS, TRACE] request method. [default: GET]
+      -p, --proxy <server:port>    Use proxy server for request.
       -t, --time <sec>         Run benchmark for <sec> seconds. [default: 30]
       -V, --version            Print version information
   ```

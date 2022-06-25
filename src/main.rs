@@ -1,4 +1,4 @@
-use std::{time::Duration, sync::atomic::Ordering, net::ToSocketAddrs};
+use std::{time::Duration, sync::atomic::Ordering, net::{ToSocketAddrs, SocketAddr}};
 use clap::{arg, Command};
 use http::{request, Method, Uri, Version};
 use byte_unit::Byte;
@@ -6,13 +6,19 @@ use byte_unit::Byte;
 mod core;
 
 fn main() -> core::Result<()> {
-    let (config, time) = parse_args()?;
+    let (config, time, proxy) = parse_args()?;
 
     println!("Welcome to the Webbench.\n");
 
     print!("Request:\n{}", std::str::from_utf8(&config.request).unwrap());
-    println!("\nRunning info: {} client(s), running {} sec.\n", config.clients, time);
-    
+    print!("\nRunning info: {} client(s), running {} sec", config.clients, time);
+
+    if let Some(p) = proxy {
+        print!(", via proxy server: {}", p);
+    }
+
+    println!(".\n");
+
     let benchmark = core::Webbench::new(config)?;
 
     benchmark.start();
@@ -47,13 +53,15 @@ fn main() -> core::Result<()> {
     Ok(())
 }
 
-fn parse_args() -> core::Result<(core::Config, usize)> {
+fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
     let mut clients = usize::default();
     let mut time = usize::default();
 
     let mut method = Method::default();
     let mut uri = Uri::default();
     let mut version = Version::default();
+
+    let mut proxy = None;
 
     let args = Command::new("Webbench - Simple Web Benchmark")
         .author("Copyright (c) Ho 229")
@@ -110,6 +118,14 @@ fn parse_args() -> core::Result<(core::Config, usize)> {
                 }
             }))
 
+        .arg(arg!(-p --proxy "Use proxy server for request.")
+            .value_name("server:port").validator(|p| {
+                match p.to_socket_addrs() {
+                    Ok(mut res) => { proxy = Some(res.next().unwrap()); Ok(()) },
+                    Err(e) => Err(e.to_string()),
+                }
+            }))
+
         .arg(arg!([URL] "URL address.").required(true).validator(|str| {
             match str.parse::<Uri>() {
                 Ok(u) if u.host().is_some() && u.scheme().is_some() => { uri = u; Ok(()) },
@@ -133,17 +149,21 @@ fn parse_args() -> core::Result<(core::Config, usize)> {
         .header("Connection", connection)
         .body(())?;
 
-    let addr = format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(
-        match uri.scheme_str().unwrap() {
-            "https" => 443,
-            _ => 80,
-        }
-    )).to_socket_addrs()?.as_slice().to_vec();
+    let addr = if let Some(p) = proxy {
+        vec![p]
+    } else {
+        format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(
+            match uri.scheme_str().unwrap() {
+                "https" => 443,
+                _ => 80,
+            }
+        )).to_socket_addrs()?.as_slice().to_vec()
+    };
 
     Ok((core::Config {
         addr,
         request: core::protocol::raw_request(request)?,
         is_keepalive,
         clients,
-    }, time))
+    }, time, proxy))
 }
