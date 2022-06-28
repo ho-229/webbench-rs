@@ -3,7 +3,7 @@ use std::{sync::{atomic::{AtomicU32, AtomicU64, Ordering}, Arc}, time::Duration,
 
 #[derive(Debug)]
 pub struct Config {
-    pub addr: Vec<SocketAddr>,
+    pub addrs: Vec<SocketAddr>,
     pub request: Vec<u8>,
     pub is_keepalive: bool,
     pub clients: usize,
@@ -42,7 +42,11 @@ impl Webbench {
         })
     }
 
-    pub fn start(&self) {
+    pub fn start(&self) -> super::Result<()> {
+        if let Err(e) = std::net::TcpStream::connect(&*self.inner.config.addrs) {
+            return Err(Box::new(e));
+        }
+
         for _ in 0..self.inner.config.clients {
             if self.inner.config.is_keepalive {
                 self.runtime.spawn(Self::bench_keepalive(self.inner.clone()));
@@ -50,6 +54,8 @@ impl Webbench {
                 self.runtime.spawn(Self::bench_close(self.inner.clone()));
             }
         }
+
+        Ok(())
     }
 
     pub fn stop(self) {
@@ -65,7 +71,7 @@ impl Webbench {
         let mut buf = [0; 1024];
         loop {
             let mut connection;
-            match TcpStream::connect(&*inner.config.addr).await {
+            match TcpStream::connect(&*inner.config.addrs).await {
                 Ok(c) => {
                     connection = c;
                     let _ = connection.set_nodelay(true);
@@ -108,7 +114,7 @@ impl Webbench {
         loop {
             let mut connection;
 
-            match TcpStream::connect(&*inner.config.addr).await {
+            match TcpStream::connect(&*inner.config.addrs).await {
                 Ok(c) => {
                     connection = c;
                     let _ = connection.set_nodelay(true);

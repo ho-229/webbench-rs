@@ -21,7 +21,7 @@ fn main() -> core::Result<()> {
 
     let benchmark = core::Webbench::new(config)?;
 
-    benchmark.start();
+    benchmark.start()?;
 
     let mut count = time;
     let (success, failed, received) = loop {
@@ -63,7 +63,8 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
 
     let mut proxy = None;
 
-    let args = Command::new("Webbench - Simple Web Benchmark")
+    let args = Command::new("Webbench")
+        .about("Simple Web Benchmark written by Rust.")
         .author("Copyright (c) Ho 229")
         .version(clap::crate_version!())
         
@@ -161,7 +162,7 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
     };
 
     Ok((core::Config {
-        addr,
+        addrs: addr,
         request: core::protocol::raw_request(request)?,
         is_keepalive,
         clients,
