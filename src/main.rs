@@ -1,5 +1,5 @@
 use std::{time::Duration, sync::atomic::Ordering, net::{ToSocketAddrs, SocketAddr}};
-use clap::{arg, Command};
+use clap::{arg, Command, ArgAction};
 use http::{request, Method, Uri, Version};
 use byte_unit::Byte;
 
@@ -43,13 +43,14 @@ fn main() -> core::Result<()> {
         count -= 1;
     };
 
+    benchmark.stop();
+
     println!("Received: total {}, {}/s.", Byte::from(received).get_appropriate_unit(true),
         Byte::from((received as f64 / time as f64) as u128).get_appropriate_unit(true));
-    println!("Requests: {} req/min. {} success, {} failed.",
-        (60.00 / time as f64 * success as f64) as u32, success, failed);
+    println!("Requests: {} req/min, {} req/s. {} success, {} failed.",
+        (success as f64 / time as f64) as u32, (60.00 / time as f64 * success as f64) as u32,
+        success, failed);
 
-    benchmark.stop();
-    
     Ok(())
 }
 
@@ -62,6 +63,7 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
     let mut version = Version::default();
 
     let mut proxy = None;
+    let mut headers = Vec::new();
 
     let args = Command::new("Webbench")
         .about("Simple Web Benchmark written by Rust.")
@@ -119,6 +121,17 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
                 }
             }))
 
+        .arg(arg!(--header "Send requests using customized header.")
+            .value_name("key:value").action(ArgAction::Append).validator(|h| {
+                match h.split_once(":") {
+                    Some((key, value)) => {
+                        headers.push((String::from(key), String::from(value)));
+                        Ok(())
+                    },
+                    None => Err("Parsing header has failed.".to_string())
+                }
+            }))
+
         .arg(arg!(-p --proxy "Use proxy server for request.")
             .value_name("server:port").validator(|p| {
                 match p.to_socket_addrs() {
@@ -127,10 +140,15 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
                 }
             }))
 
-        .arg(arg!([URL] "URL address.").required(true).validator(|str| {
+        .arg(arg!(<URL> "URL address.").validator(|str| {
             match str.parse::<Uri>() {
-                Ok(u) if u.host().is_some() && u.scheme().is_some() => { uri = u; Ok(()) },
-                Ok(_) => Err("URI must contain host and scheme.".to_string()),
+                Ok(u) if u.host().is_some() && u.scheme().is_some() => {
+                    match u.scheme_str().unwrap() {
+                        "https" | "http" => { uri = u; Ok(()) }
+                        _ => { Err("Scheme unsupported.".to_string()) }
+                    }
+                },
+                Ok(_) => Err("The URL must contain host and scheme.".to_string()),
                 Err(e) => Err(e.to_string())
             }
         }))
@@ -141,16 +159,21 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
 
     let connection = if is_keepalive { "keep-alive" } else { "close" };
 
-    let request = request::Builder::new()
+    let mut request = request::Builder::new()
         .method(method)
         .uri(uri.clone())
         .version(version)
         .header("User-Agent", "webbench-rs")
         .header("Host", uri.clone().host().unwrap())
-        .header("Connection", connection)
-        .body(())?;
+        .header("Connection", connection);
 
-    let addr = if let Some(p) = proxy {
+    for (key, value) in headers {
+        request.headers_mut().unwrap().insert(key.as_str(), value.into_bytes());
+    }
+
+    let request = request.body(())?;
+
+    let addrs = if let Some(p) = proxy {
         vec![p]
     } else {
         format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(
@@ -162,7 +185,7 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
     };
 
     Ok((core::Config {
-        addrs: addr,
+        addrs,
         request: core::protocol::raw_request(request)?,
         is_keepalive,
         clients,
