@@ -1,6 +1,6 @@
-use std::{time::Duration, sync::atomic::Ordering, net::{ToSocketAddrs, SocketAddr}};
+use std::{time::Duration, sync::atomic::Ordering, net::{ToSocketAddrs, SocketAddr}, str::FromStr};
 use clap::{arg, Command, ArgAction};
-use http::{request, Method, Uri, Version};
+use http::{request, Method, Uri, Version, HeaderValue, header::HeaderName};
 use byte_unit::Byte;
 
 mod core;
@@ -48,7 +48,7 @@ fn main() -> core::Result<()> {
     println!("Received: total {}, {}/s.", Byte::from(received).get_appropriate_unit(true),
         Byte::from((received as f64 / time as f64) as u128).get_appropriate_unit(true));
     println!("Requests: {} req/min, {} req/s. {} success, {} failed.",
-        (success as f64 / time as f64) as u32, (60.00 / time as f64 * success as f64) as u32,
+        (60.00 / time as f64 * success as f64) as u32, (success as f64 / time as f64) as u32,
         success, failed);
 
     Ok(())
@@ -144,7 +144,7 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
             match str.parse::<Uri>() {
                 Ok(u) if u.host().is_some() && u.scheme().is_some() => {
                     match u.scheme_str().unwrap() {
-                        "https" | "http" => { uri = u; Ok(()) }
+                        /*"https" |*/ "http" => { uri = u; Ok(()) }
                         _ => { Err("Scheme unsupported.".to_string()) }
                     }
                 },
@@ -168,17 +168,16 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
         .header("Connection", connection);
 
     for (key, value) in headers {
-        request.headers_mut().unwrap().insert(key.as_str(), value.into_bytes());
+        request.headers_mut().unwrap().insert(
+            HeaderName::from_str(&key)?, HeaderValue::from_str(&value)?);
     }
-
-    let request = request.body(())?;
 
     let addrs = if let Some(p) = proxy {
         vec![p]
     } else {
         format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(
             match uri.scheme_str().unwrap() {
-                "https" => 443,
+                //"https" => 443,
                 _ => 80,
             }
         )).to_socket_addrs()?.as_slice().to_vec()
@@ -186,7 +185,7 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
 
     Ok((core::Config {
         addrs,
-        request: core::protocol::raw_request(request)?,
+        request: core::protocol::raw_request(request.body(())?)?,
         is_keepalive,
         clients,
     }, time, proxy))
