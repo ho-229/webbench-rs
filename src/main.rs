@@ -47,9 +47,8 @@ fn main() -> core::Result<()> {
 
     println!("Received: total {}, {}/s.", Byte::from(received).get_appropriate_unit(true),
         Byte::from((received as f64 / time as f64) as u128).get_appropriate_unit(true));
-    println!("Requests: {} req/min, {} req/s. {} success, {} failed.",
-        (60.00 / time as f64 * success as f64) as u32, (success as f64 / time as f64) as u32,
-        success, failed);
+    println!("Requests: {} req/min, {} req/s. {success} success, {failed} failed.",
+        (60.00 / time as f64 * success as f64) as u32, (success as f64 / time as f64) as u32);
 
     Ok(())
 }
@@ -111,7 +110,7 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
             }))
 
         .arg(arg!(-h --http "Use HTTP/[0.9, 1.0, 1.1] version.")
-            .default_value("1.1").validator(|str| {
+            .value_name("version").default_value("1.1").validator(|str| {
                 match str {
                     "0.9" => { version = Version::HTTP_09; Ok(()) },
                     "1.0" => { version = Version::HTTP_10; Ok(()) },
@@ -121,7 +120,7 @@ fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
                 }
             }))
 
-        .arg(arg!(--header "Send requests using customized header.")
+        .arg(arg!(-H --header "Send requests using customized header.")
             .value_name("key:value").action(ArgAction::Append).validator(|h| {
                 match h.split_once(":") {
                     Some((key, value)) => {
