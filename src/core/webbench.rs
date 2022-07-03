@@ -1,5 +1,5 @@
 ﻿use tokio::{runtime, net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}};
-use std::{sync::{atomic::{AtomicU32, AtomicU64, Ordering}, Arc}, time::Duration, net::SocketAddr};
+use std::{sync::{atomic::{AtomicU32, AtomicU64, Ordering, AtomicBool}, Arc}, time::Duration, net::SocketAddr};
 
 #[derive(Debug)]
 pub struct Config {
@@ -11,6 +11,7 @@ pub struct Config {
 
 #[derive(Debug, Default)]
 pub struct Status {
+    pub interrupted: AtomicBool,
     pub received: AtomicU64,
     pub success: AtomicU32,
     pub failed: AtomicU32,
@@ -46,6 +47,13 @@ impl Webbench {
         if let Err(e) = std::net::TcpStream::connect(&*self.inner.config.addrs) {
             return Err(Box::new(e));
         }
+
+        let inner = self.inner.clone();
+        self.runtime.spawn(async move {
+            if let Ok(_) = tokio::signal::ctrl_c().await {
+                inner.status.interrupted.store(true, Ordering::Release);
+            }
+        });
 
         for _ in 0..self.inner.config.clients {
             if self.inner.config.is_keepalive {

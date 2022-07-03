@@ -26,16 +26,18 @@ fn main() -> core::Result<()> {
     let mut count = time;
     let (success, failed, received) = loop {
         let status = benchmark.status();
-        let success = status.success.load(Ordering::Acquire);
         let failed = status.failed.load(Ordering::Acquire);
+        let success = status.success.load(Ordering::Acquire);
         let received = status.received.load(Ordering::Acquire);
+        let interrupted = status.interrupted.load(Ordering::Acquire);
 
         if failed as f64 / success as f64 > 0.5 {
             println!("Too many failures.");
             break (success, failed, received);
-        }
-
-        if count == 0 {
+        } else if interrupted {
+            println!("\nInterrupted by user.");
+            break (success, failed, received);
+        } else if count == 0 {
             break (success, failed, received);
         }
 
