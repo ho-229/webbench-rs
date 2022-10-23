@@ -2,11 +2,13 @@
 name = "webbench"
 version = "0.1.0"
 edition = "2021"
+author = "Ho 229 <ho229v3666@gmail.com>"
+about = "Simple Web Benchmark written by Rust."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "3.2.7", features = ["cargo"] }
+clap = { version = "4.0", features = ["cargo", "derive"] }
 tokio = { version = "1.18.2", features = ["full"] }
 http = { version = "0.2.7" }
 num_cpus = { version = "1.13.1" }

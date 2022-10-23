@@ -1,12 +1,23 @@
-﻿use tokio::{runtime, net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}};
-use std::{sync::{atomic::{AtomicU32, AtomicU64, Ordering, AtomicBool}, Arc}, time::Duration, net::SocketAddr};
+﻿use std::{
+    net::SocketAddr,
+    sync::{
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    runtime,
+};
 
 #[derive(Debug)]
 pub struct Config {
     pub addrs: Vec<SocketAddr>,
     pub request: Vec<u8>,
     pub is_keepalive: bool,
-    pub clients: usize,
+    pub clients: u32,
 }
 
 #[derive(Debug, Default)]
@@ -44,23 +55,22 @@ impl Webbench {
     }
 
     pub fn start(&self) -> super::Result<()> {
-        if let Err(e) = std::net::TcpStream::connect(&*self.inner.config.addrs) {
-            return Err(Box::new(e));
-        }
+        std::net::TcpStream::connect(&*self.inner.config.addrs)?;
 
         let inner = self.inner.clone();
         self.runtime.spawn(async move {
-            if let Ok(_) = tokio::signal::ctrl_c().await {
-                inner.status.interrupted.store(true, Ordering::Release);
-            }
+            _ = tokio::signal::ctrl_c().await.map_err(|e| println!("{}", e));
+
+            inner.status.interrupted.store(true, Ordering::Release);
         });
 
         for _ in 0..self.inner.config.clients {
-            if self.inner.config.is_keepalive {
-                self.runtime.spawn(Self::bench_keepalive(self.inner.clone()));
-            } else {
-                self.runtime.spawn(Self::bench_close(self.inner.clone()));
-            }
+            match self.inner.config.is_keepalive {
+                true => self
+                    .runtime
+                    .spawn(Self::bench_keepalive(self.inner.clone())),
+                false => self.runtime.spawn(Self::bench_close(self.inner.clone())),
+            };
         }
 
         Ok(())
@@ -83,11 +93,11 @@ impl Webbench {
                 Ok(c) => {
                     connection = c;
                     let _ = connection.set_nodelay(true);
-                },
+                }
                 Err(_) => {
                     inner.status.failed.fetch_add(1, Ordering::AcqRel);
                     continue;
-                },
+                }
             };
 
             loop {
@@ -101,7 +111,7 @@ impl Webbench {
                     acc += n as u64;
 
                     if n < 1024 {
-                        break;   // EOF
+                        break; // EOF
                     }
                 }
 
@@ -126,11 +136,11 @@ impl Webbench {
                 Ok(c) => {
                     connection = c;
                     let _ = connection.set_nodelay(true);
-                },
+                }
                 Err(_) => {
                     inner.status.failed.fetch_add(1, Ordering::AcqRel);
                     continue;
-                },
+                }
             }
 
             if let Err(_) = connection.write_all(&inner.config.request).await {
@@ -143,7 +153,7 @@ impl Webbench {
                 acc += n as u64;
 
                 if n < 1024 {
-                    break;   // EOF
+                    break; // EOF
                 }
             }
 

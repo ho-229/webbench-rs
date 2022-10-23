@@ -1,19 +1,121 @@
-use std::{time::Duration, sync::atomic::Ordering, net::{ToSocketAddrs, SocketAddr}, str::FromStr};
-use clap::{arg, Command, ArgAction};
-use http::{request, Method, Uri, Version, HeaderValue, header::HeaderName};
-use byte_unit::Byte;
-
 mod core;
 
+use byte_unit::Byte;
+use clap::{arg, command, ArgAction, Parser};
+use http::{header::HeaderName, request, HeaderValue, Uri};
+use std::{
+    net::{SocketAddr, ToSocketAddrs},
+    str::FromStr,
+    sync::atomic::Ordering,
+    time::Duration,
+};
+
+use crate::core::{Method, Version};
+
+#[derive(Debug, Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(value_parser = Uri::from_str)]
+    url: Uri,
+
+    /// Run benchmark for <TIME> seconds.
+    #[arg(short, long, default_value_t = 30)]
+    #[arg(value_parser = clap::value_parser!(u32).range(1..))]
+    time: u32,
+
+    /// Run <CLIENT> HTTP clients at once.
+    #[arg(short, long, default_value_t = 1)]
+    #[arg(value_parser = clap::value_parser!(u32).range(1..))]
+    client: u32,
+
+    /// Use proxy server for request.
+    #[arg(short, long)]
+    #[arg(value_parser = SocketAddr::from_str)]
+    proxy: Option<SocketAddr>,
+
+    /// Keep-Alive
+    #[arg(short, long, default_value_t = false)]
+    keep: bool,
+
+    /// Use <METHOD> request method.
+    #[arg(short, long, value_enum, default_value_t = Method::GET)]
+    method: Method,
+
+    /// Use <HTTP> version for request.
+    #[arg(long, value_enum, default_value_t = Version::H11)]
+    http: Version,
+
+    /// Send requests using customized header.
+    #[arg(long, value_parser = parse_header, action = ArgAction::Append)]
+    header: Vec<(HeaderName, HeaderValue)>,
+}
+
+fn parse_header(header: &str) -> Result<(HeaderName, HeaderValue), String> {
+    header
+        .split_once(":")
+        .ok_or("Invalid HTTP header".to_string())
+        .and_then(|h| {
+            Ok((
+                HeaderName::from_str(h.0)
+                    .map_err(|e| format!("Invalid header name: {}", e.to_string()))?,
+                HeaderValue::from_str(h.1)
+                    .map_err(|e| format!("Invalid header value: {}", e.to_string()))?,
+            ))
+        })
+}
+
+fn parse_args(args: &Args) -> core::Result<core::Config> {
+    let is_keepalive = args.keep && args.http == Version::H11;
+
+    let connection = if is_keepalive { "keep-alive" } else { "close" };
+    let host = args.url.host().ok_or("Invalid host")?;
+
+    let mut request = request::Builder::new()
+        .method(Into::<http::Method>::into(args.method))
+        .uri(args.url.clone())
+        .version(args.http.into())
+        .header("User-Agent", "webbench-rs")
+        .header("Host", host)
+        .header("Connection", connection);
+
+    request
+        .headers_mut()
+        .unwrap()
+        .extend(args.header.to_owned().into_iter());
+
+    let addrs = args.proxy.map(|p| vec![p]).or_else(|| {
+        format!(
+            "{}:{}",
+            host,
+            args.url.port_u16().unwrap_or(80) // Default port of HTTP
+        )
+        .to_socket_addrs()
+        .ok()
+        .map(|addrs| addrs.as_slice().to_vec())
+    })
+    .ok_or("Invalid addrs")?;
+
+    Ok(core::Config {
+        addrs,
+        request: core::protocol::raw_request(request.body(())?)?,
+        is_keepalive,
+        clients: args.client,
+    })
+}
+
 fn main() -> core::Result<()> {
-    let (config, time, proxy) = parse_args()?;
+    let args = Args::parse();
+    let config = parse_args(&args)?;
 
     println!("Welcome to the Webbench.\n");
 
-    print!("Request:\n{}", std::str::from_utf8(&config.request).unwrap());
-    print!("\nRunning info: {} client(s), running {} sec", config.clients, time);
+    print!("Request:\n{}", std::str::from_utf8(&config.request)?);
+    print!(
+        "\nRunning info: {} client(s), running {} sec",
+        config.clients, args.time
+    );
 
-    if let Some(p) = proxy {
+    if let Some(p) = args.proxy {
         print!(", via proxy server: {}", p);
     }
 
@@ -23,7 +125,7 @@ fn main() -> core::Result<()> {
 
     benchmark.start()?;
 
-    let mut count = time;
+    let mut count = args.time;
     let (success, failed, received) = loop {
         let status = benchmark.status();
         let failed = status.failed.load(Ordering::Acquire);
@@ -47,147 +149,16 @@ fn main() -> core::Result<()> {
 
     benchmark.stop();
 
-    println!("Received: total {}, {}/s.", Byte::from(received).get_appropriate_unit(true),
-        Byte::from((received as f64 / time as f64) as u128).get_appropriate_unit(true));
-    println!("Requests: {} req/min, {} req/s. {success} success, {failed} failed.",
-        (60.00 / time as f64 * success as f64) as u32, (success as f64 / time as f64) as u32);
+    println!(
+        "Received: total {}, {}/s.",
+        Byte::from(received).get_appropriate_unit(true),
+        Byte::from((received as f64 / args.time as f64) as u128).get_appropriate_unit(true)
+    );
+    println!(
+        "Requests: {} req/min, {} req/s. {success} success, {failed} failed.",
+        (60.00 / args.time as f64 * success as f64) as u32,
+        (success as f64 / args.time as f64) as u32
+    );
 
     Ok(())
-}
-
-fn parse_args() -> core::Result<(core::Config, usize, Option<SocketAddr>)> {
-    let mut clients = usize::default();
-    let mut time = usize::default();
-
-    let mut method = Method::default();
-    let mut uri = Uri::default();
-    let mut version = Version::default();
-
-    let mut proxy = None;
-    let mut headers = Vec::new();
-
-    let args = Command::new("Webbench")
-        .about("Simple Web Benchmark written by Rust.")
-        .author("Copyright (c) Ho 229")
-        .version(clap::crate_version!())
-        
-        .arg(arg!(-t --time "Run benchmark for <sec> seconds.")
-            .value_name("sec").default_value("30").validator(|num| {
-                match num.parse::<usize>() {
-                    Ok(n) => {
-                        if n > 0 { time = n; Ok(()) }
-                        else { Err("<sec> must be greater than 0.".to_string()) }
-                    },
-                    Err(err) => Err(err.to_string())
-                }
-            }))
-
-        .arg(arg!(-c --client "Run <N> HTTP clients at once.")
-            .value_name("N").default_value("1").validator(|num| {
-                match num.parse::<usize>() {
-                    Ok(n) => {
-                        if n > 0 {  clients = n; Ok(()) }
-                        else { Err("N must be greater than 0.".to_string()) }
-                    },
-                    Err(err) => Err(err.to_string())
-                }
-            }))
-
-        .arg(arg!(-k --keep "Keep-Alive."))
-        //.arg(arg!(-f --force "Don't wait for reply from server."))
-
-        .arg(arg!(-m --method "Use [GET, HEAD, OPTIONS, TRACE] request method.")
-            .default_value("GET").validator(|str| {
-                match str.parse::<Method>() {
-                    Ok(res) => {
-                        match res {
-                            Method::GET | Method::HEAD | Method::OPTIONS | Method::TRACE => {
-                                method = res; Ok(())
-                            },
-                            _ => Err("Only [GET, HEAD, OPTIONS, TRACE] are supported by --method.".to_string())
-                        }
-                    },
-                    Err(e) => Err(e.to_string())
-                }
-            }))
-
-        .arg(arg!(-h --http "Use HTTP/[0.9, 1.0, 1.1] version.")
-            .value_name("version").default_value("1.1").validator(|str| {
-                match str {
-                    "0.9" => { version = Version::HTTP_09; Ok(()) },
-                    "1.0" => { version = Version::HTTP_10; Ok(()) },
-                    "1.1" => { version = Version::HTTP_11; Ok(()) },
-                    //"2" => { version = Version::HTTP_2; Ok(()) },
-                    _ => Err("Only [0.9, 1.0, 1.1] are supported by --http.".to_string())
-                }
-            }))
-
-        .arg(arg!(-H --header "Send requests using customized header.")
-            .value_name("key:value").action(ArgAction::Append).validator(|h| {
-                match h.split_once(":") {
-                    Some((key, value)) => {
-                        headers.push((String::from(key), String::from(value)));
-                        Ok(())
-                    },
-                    None => Err("Parsing header has failed.".to_string())
-                }
-            }))
-
-        .arg(arg!(-p --proxy "Use proxy server for request.")
-            .value_name("server:port").validator(|p| {
-                match p.to_socket_addrs() {
-                    Ok(mut res) => { proxy = Some(res.next().unwrap()); Ok(()) },
-                    Err(e) => Err(e.to_string()),
-                }
-            }))
-
-        .arg(arg!(<URL> "URL address.").validator(|str| {
-            match str.parse::<Uri>() {
-                Ok(u) if u.host().is_some() && u.scheme().is_some() => {
-                    match u.scheme_str().unwrap() {
-                        /*"https" |*/ "http" => { uri = u; Ok(()) }
-                        _ => { Err("Scheme unsupported.".to_string()) }
-                    }
-                },
-                Ok(_) => Err("The URL must contain host and scheme.".to_string()),
-                Err(e) => Err(e.to_string())
-            }
-        }))
-        
-        .get_matches();
-
-    let is_keepalive = args.is_present("keep") && version == Version::HTTP_11;
-
-    let connection = if is_keepalive { "keep-alive" } else { "close" };
-
-    let mut request = request::Builder::new()
-        .method(method)
-        .uri(uri.clone())
-        .version(version)
-        .header("User-Agent", "webbench-rs")
-        .header("Host", uri.clone().host().unwrap())
-        .header("Connection", connection);
-
-    for (key, value) in headers {
-        request.headers_mut().unwrap().insert(
-            HeaderName::from_str(&key)?, HeaderValue::from_str(&value)?);
-    }
-
-    let addrs = if let Some(p) = proxy {
-        vec![p]
-    } else {
-        format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(
-            match uri.scheme_str().unwrap() {
-                //"https" => 443,
-                _ => 80,
-            }
-        )).to_socket_addrs()?.as_slice().to_vec()
-    };
-
-    Ok((core::Config {
-        addrs,
-        request: core::protocol::raw_request(request.body(())?)?,
-        is_keepalive,
-        clients,
-    }, time, proxy))
 }
