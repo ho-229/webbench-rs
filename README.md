@@ -26,20 +26,50 @@ This is a Rust refactored version of [Radim Kolar - Web Bench](http://home.tisca
 - Command line usage
 
   ```txt
-  USAGE:
-      webbench [OPTIONS] <URL>
+  Usage: webbench [OPTIONS] <URL>
 
-  ARGS:
-      <URL>    URL address.
+  Arguments:
+    <URL>
+  
+  Options:
+    -t, --time \<TIME>
+            Run benchmark for \<TIME> seconds
 
-  OPTIONS:
-      -c, --client <N>             Run <N> HTTP clients at once. [default: 1]
-      -h, --http <http>            Use HTTP/[0.9, 1.0, 1.1] version. [default: 1.1]
-          --header <key:value>     Send requests using customized header.
-          --help                   Print help information
-      -k, --keep                   Keep-Alive.
-      -m, --method <method>        Use [GET, HEAD, OPTIONS, TRACE] request method. [default: GET]
-      -p, --proxy <server:port>    Use proxy server for request.
-      -t, --time <sec>             Run benchmark for <sec> seconds. [default: 30]
-      -V, --version                Print version information
+            [default: 30]
+
+    -c, --client <CLIENT>
+            Run <CLIENT> HTTP clients at once
+
+            [default: 1]
+
+    -p, --proxy <PROXY>
+            Use proxy server for request
+
+    -k, --keep
+            Keep-Alive
+
+    -m, --method <METHOD>
+            Use <METHOD> request method
+
+            [default: get]
+            [possible values: options, get, head, trace]
+
+        --http <HTTP>
+            Use <HTTP> version for request
+          
+            [default: h11]
+
+            Possible values:
+            - h09: HTTP 0.9
+            - h10: HTTP 1.0
+            - h11: HTTP 1.1
+
+        --header <HEADER>
+            Send requests using customized header
+
+    -h, --help
+            Print help information (use `-h` for a summary)
+
+    -V, --version
+            Print version information
   ```
